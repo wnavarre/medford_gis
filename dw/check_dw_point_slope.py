@@ -8,6 +8,12 @@ from geopandas import GeoSeries, GeoDataFrame
 gpd = geopandas
 
 BIG_DISTANCE = 4096 * 64
+METER = 1
+CENTIMETER = METER / 100
+MILLIMETER = CENTIMETER / 10
+
+OVERLAPS_DISTANCE = MILLIMETER * .001
+
 
 def ensure_point_id(data):
     try:
@@ -40,20 +46,65 @@ def check_sliced(data, depth, width, slice_count):
     
     Passes other columns thru to the filtered result.
     width_slice is removed.
+
+    Returns `data` and immediate winner polygons.
     """
     print("Checking slice_count=", slice_count)
     before_count = len(data)
     needed_area = depth * width / slice_count
     areas = data.width_slice.area
-    area_bools = data.width_slice.area >= needed_area
-    data = data[area_bools]
-    if len(data) == before_count: return data
+    data = data[data.width_slice.area >= needed_area]
+    #if len(data) != before_count: return data, None
     data = clean_dataframe(data)
+    data["approx_slice"] = data.width_slice.buffer(OVERLAPS_DISTANCE)
+    data["stop_width_segment"] = data.approx_slice.intersection(data.stop_width)
+    data = data[ data.stop_width_segment.length >= width ]
     is_ok_point = data.groupby("point_id").size() >= slice_count
     is_ok_rows = is_ok_point.loc[data.point_id]
     is_ok_rows.reset_index(inplace=True, drop=True)
-    out = data.loc[is_ok_rows]
-    return out
+    data = data.loc[is_ok_rows]
+    del is_ok_rows
+    del is_ok_point
+
+    # Now that we've eliminated a bunch of stuff, let's 
+    # Find some immediate winners!
+    # We've already ensured that all of the stop_widths are OK
+    # (and, due to a pre-check, the initial start_width, and thus also
+    # all start_widths).
+    # So now we consider the trapezoid formed by the convex hull of the
+    # slice's start_width and stop_width segment.
+    # If it so happens that if the slice covers that trapezoid, then we can be sure
+    # that at every point the width is at least as much as the smaller of the stop_width_segment
+    # and the start_width_segment.
+
+    # We should really have a way to note winning *slices*
+    # so they can be eliminated while the recursion happens.
+    start_width_segment = data.approx_slice.intersection(data.start_width)
+    trapezoid = start_width_segment.union(data.stop_width_segment).convex_hull
+    obviously_winning_slice = data.approx_slice.covers(trapezoid)
+    del data["approx_slice"]
+    del data["stop_width_segment"]
+    if obviously_winning_slice.sum() < slice_count:
+        return data, None
+    winning_slices_df = data[obviously_winning_slice]
+    is_winner_point = winning_slices_df.groupby("point_id").size() >= slice_count
+    is_winner_rows = is_winner_point.loc[winning_slices_df.point_id]
+    is_winner_rows.reset_index(inplace=True, drop=True)
+    winners = winning_slices_df.loc[is_winner_rows]
+    if len(winners) == 0:
+        return data, None
+    winners = winners.reset_index(drop=True)
+    # Now that we have some winners, eliminate the entire POLYGON from the data.
+    polygon_id_winners = winners.geometry_id.unique
+    right = pandas.DataFrame(dict(
+        geometry_id=polygon_id_winners,
+        ones = np.ones((len(geometry_id_winners),), dtype=int)
+    ))
+    data2 = data.merge(right, on="geometry_id", how="left")
+    data2 = data2.reset_index(drop=True)
+    data = data[data2["ones"] != 1]
+    data = clean_dataframe(data)
+    return data, winners
 
 def do_slicing(data, depth, slice_count, unit_translation):
     """
@@ -96,7 +147,6 @@ def check_dw_point_angle(data, depth, width, rads):
     except KeyError:
         data["point_id"] = np.arange(0, len(data))
     # We will join against input_ids later to get a final result later.
-    input_ids = pandas.DataFrame(dict(geometry_id=data.geometry_id, point_id=data.point_id))
     sincos = math.cos(rads), math.sin(rads)
     full_translation = (depth * sincos[0], depth * sincos[1])
     data["end_point"] = data.point.translate(*full_translation)
@@ -119,16 +169,29 @@ def check_dw_point_angle(data, depth, width, rads):
     del data["geometry"]
     data.set_geometry("width_slice", inplace=True)
     data = with_updated_width_slice(data)
+    ## While things are simple and we only have one slice per point,
+    ## make sure start_width is long enough. As we slice,
+    ## we can safely look at just stop_width.
+    start_width_segment = data.width_slice.exterior.buffer(OVERLAPS_DISTANCE).intersection(data.start_width)
+    for e in start_width_segment:
+        print(e)
+    data = data[start_width_segment.length >= width]
+    del start_width_segment
+    data = clean_dataframe(data)
     slice_goal = depth * 30
     slice_count = 1
+    winners_list = []
     while True:
         # Check
-        data = check_sliced(data, depth, width, slice_count)
+        data, winners = check_sliced(data, depth, width, slice_count)
+        if winners is not None:
+            winners_list.append(winners.geometry_id.unique())
         if slice_count >= slice_goal: break
         if len(data) == 0: break
         # Prepare
         data, slice_count = do_slicing(data, depth, slice_count, sincos)
-    return data["geometry_id"].unique()
+    winners_list.append(data.geometry_id.unique())
+    return np.concatenate(winners_list)
 
 def RationalNumber(float):
     def __new__(cl, numerator, denominator):
@@ -213,6 +276,7 @@ def dw_winners_array(data, possible_frontage, definite_non_frontage, depth, widt
         print("type(right[geo_id]): ", right["geometry_id"].dtype)
         print("ABOUT TO DO THE JOIN!")
         sys.stdout.flush()
+        # TODO: Use a subset of data's columns in the right hand side of the merge
         data2 = data.merge(right, on="geometry_id", how="left")
         data2 = data2.reset_index(drop=True)
         data = data[data2["ones"] != 1]

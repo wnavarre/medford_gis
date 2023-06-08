@@ -40,7 +40,7 @@ class TestCheckSliced(unittest.TestCase):
             depth_line=GeoSeries([depth_line] * 2)
         ))
         df = with_updated_width_slice(df)
-        res = check_sliced(df, 40, 20, 2)
+        res, _ = check_sliced(df, 40, 20, 2)
         self.assertEqual(len(res), 0)
 
 class TestDWPointSlope(unittest.TestCase):

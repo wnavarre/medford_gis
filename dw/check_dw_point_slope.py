@@ -12,7 +12,7 @@ METER = 1
 CENTIMETER = METER / 100
 MILLIMETER = CENTIMETER / 10
 
-OVERLAPS_DISTANCE = MILLIMETER * .001
+EPSILON = MILLIMETER * .001
 
 
 def ensure_point_id(data):
@@ -134,31 +134,28 @@ def do_slicing(data, depth, slice_count, unit_translation):
     print("Done-- len(data) is", len(data))
     return data, new_slice_count
 
-def check_dw_point_angle(data, depth, width, rads):
+def check_dw_point_y_depth(data, width, depth):
     """
-    data is a dataframe with columns:
     * geometry (The parcel)
     * geometry_id (uniquely identifies the parcel)
     * point (a point on the parcel's frontage to test)
     * point_id (should be unique for EVERY row!!!)
+
+    Depth is parallel to y axis.
     """
     try:
         data["point_id"]
     except KeyError:
         data["point_id"] = np.arange(0, len(data))
     # We will join against input_ids later to get a final result later.
-    sincos = math.cos(rads), math.sin(rads)
-    full_translation = (depth * sincos[0], depth * sincos[1])
-    data["end_point"] = data.point.translate(*full_translation)
-    data["depth_line"] = data.end_point.union(data.point).convex_hull
-
+    full_translation = (0, depth)
+    data["depth_line"] = data.point.translate(*full_translation).union(data.point).convex_hull
     data = data[data["geometry"].covers(data["depth_line"])]
     data = clean_dataframe(data, False)
     negate_tuple = lambda x: tuple(-e for e in x)
     width_angle = rads + math.pi / 2
-    big_translation = (BIG_DISTANCE * math.cos(width_angle),
-                       BIG_DISTANCE * math.sin(width_angle))
-
+    big_h_translation = (BIG_DISTANCE, 0)
+    
     start_width_a = data.point.translate(*big_translation)
     start_width_b = data.point.translate(*negate_tuple(big_translation))
     data["start_width"] = (start_width_a.union(start_width_b)).convex_hull
@@ -181,6 +178,7 @@ def check_dw_point_angle(data, depth, width, rads):
     slice_goal = depth * 30
     slice_count = 1
     winners_list = []
+    data["lot_buffered"] = data.geometry.buffer(EPSILON)
     while True:
         # Check
         data, winners = check_sliced(data, depth, width, slice_count)

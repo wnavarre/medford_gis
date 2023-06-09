@@ -23,7 +23,7 @@ def lot_too_small(features, idx):
 
 REGION = medford_regions.GR.SOUTH
 
-fig, ax = bool_ticker(parcels, lot_too_small, REGION, count_x=3, count_y=3, width=7/3, true_color=GREEN, false_color=RED,
+fig, ax = bool_ticker(parcels, lot_too_small, REGION, count_x=3, count_y=3, width=7/3, true_color=GOOD_COLOR, false_color=BAD_COLOR,
                       legend_kwds={'loc': "upper right", 'fontsize' : 10 })
 
 fig.subplots_adjust(hspace=2/72, wspace=2/72, left=0, right=1, top=1, bottom=0)
@@ -40,5 +40,5 @@ for i, e in enumerate(ax):
 
 if __name__ == "__main__":
     fig.savefig("./ticker.png")
-    fig.savefig("./ticker.svg")
+    #fig.savefig("./ticker.svg")
 

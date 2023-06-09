@@ -1,1 +1,1 @@
-This directory needs to be generated from data in ../masgis_shp
+This directory needs to be generated from data in ../massgis_shp

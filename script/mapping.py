@@ -11,6 +11,9 @@ NEUTRAL  = 5
 COLOR_MAX   = 5
 COLOR_COUNT = 6
 
+BAD_COLOR = RED
+GOOD_COLOR = BLUE
+
 class with_special_legend_func:
     """
     OH WHAT A HORRIBLE HACK THIS IS.

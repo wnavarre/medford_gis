@@ -203,6 +203,22 @@ class TestCache(unittest.TestCase):
         w, l = c.retrieve_results(10, 10)
         self.assertEqual(set(w), set(winners_in))
         self.assertEqual(set(l), set())
+    def test_basic_redundant(self):
+        c = self.clean_cache()
+        winners_in = ["A", "B", "C"]
+        losers_in = ["D", "E", "F"]
+        c.store_winners(20, 20, winners_in)
+        c.store_losers(20, 20, losers_in)
+        c.store_losers(10, 10, losers_in)
+        w, l = c.retrieve_results(20, 20)
+        self.assertEqual(set(w), set(winners_in))
+        self.assertEqual(set(l), set(losers_in))
+        w, l = c.retrieve_results(30, 30)
+        self.assertEqual(set(w), set())
+        self.assertEqual(set(l), set(losers_in))
+        w, l = c.retrieve_results(10, 10)
+        self.assertEqual(set(w), set(winners_in))
+        self.assertEqual(set(l), set(losers_in))
 
 class TestCacheFile(unittest.TestCase):
     def dead_cache(self): return DWCache("/tmp/example/")
@@ -235,4 +251,8 @@ class TestCacheFile(unittest.TestCase):
         c = self.clean_cache()
         entry = DWCacheFile(c, "20_20_no_ft.dwcache")
         self.assertIsNone(entry.implies_about_cand(10, 10))
+    def test_40_20_no_exact(self):
+        c = self.clean_cache()
+        entry = DWCacheFile(c, "40_20_no_ft.dwcache")
+        self.assertEqual(entry.implies_about_cand(40, 20), dw_cache.IMPLIES_FAILURE)
 if __name__ == '__main__': unittest.main()

@@ -11,13 +11,12 @@ from geopandas import GeoSeries, GeoDataFrame
 from frame_set_operations import *
 from basic_frame_operations import *
 from units import *
-import df_parallel
 #import dask_geopandas as gdask
 #import dask
 from infect import infect
 from flexible_key import *
 from fast_rotate import rotate_points_fast, fast_translate
-from performance_logging import log_time
+from performance_logging import log_time, TimerLog
 from enum import Enum
 import copy
 
@@ -32,40 +31,55 @@ GLOBAL_CALLBACK = None
 
 def function_that_does_nothing(*a, **b): pass
 
-dprint = function_that_does_nothing
+dprint = print
 
 class LoggingEvent(Enum):
     CHECK_SLICES = 1
 
-    
+def narrow_lot_ids(frame, depth, width):
+    needed = min(depth, width) - 0.1 * MILLIMETER
+    bounds = frame.lot.bounds
+    h = bounds.maxx - bounds.minx
+    v = bounds.maxy - bounds.miny
+    too_narrow = (h < needed) | (v < needed)
+    if not too_narrow.any(): return None
+    out = frame.lot_id[too_narrow]
+    print("Identified {} lots that fail based on the width test!".format(len(out)))
+    return out
+
 class DWWorkingTable:
     def __init__(self, source, rads, depth, width):
+        timer = TimerLog("Constructed DWWorkingTable")
         assert source.is_single_use()
         source.working_lot() # CHECK...
         self._depth = depth
         self._width = width
         self._slice_count = 0
         self._source = source
-        self._data = source.rotated_lots(rads).merge(
+        rotated_lots = source.rotated_lots(rads)
+        width_test_failures = narrow_lot_ids(rotated_lots, depth, width)
+        if width_test_failures is not None:
+            self.source().discard_lots(width_test_failures)
+        self._data = rotated_lots.merge(
             source.rotated_points(rads),
             how="left",
             on="lot_id"
         )
         self["depth_line"] = convex_hull(self._data.point,
-                                               fast_translate(self._data.point, 0, depth))
+                                         fast_translate(self._data.point, 0, depth))
         self._data = self._data[self._data.lot.covers(self._data.depth_line)]
         self.clean()
         self["lft_side"] = convex_hull(self._data.point,
-                                             fast_translate(self._data.point, 0, depth),
-                                             fast_translate(self._data.point, -BIG_DISTANCE, depth),
-                                             fast_translate(self._data.point, -BIG_DISTANCE, depth))
+                                       fast_translate(self._data.point, 0, depth),
+                                       fast_translate(self._data.point, -BIG_DISTANCE, depth),
+                                       fast_translate(self._data.point, -BIG_DISTANCE, depth))
         self["rgt_side"] = convex_hull(self._data.point,
-                                             fast_translate(self._data.point, 0, depth),
-                                             fast_translate(self._data.point, +BIG_DISTANCE, depth),
-                                             fast_translate(self._data.point, +BIG_DISTANCE, depth))
+                                       fast_translate(self._data.point, 0, depth),
+                                       fast_translate(self._data.point, +BIG_DISTANCE, depth),
+                                       fast_translate(self._data.point, +BIG_DISTANCE, depth))
         self["start_width"] = convex_hull(
-            fast_translate(self._data.point, -BIG_DISTANCE, 0    ),
-            fast_translate(self._data.point, +BIG_DISTANCE, 0    )
+            fast_translate(self._data.point, -BIG_DISTANCE, 0),
+            fast_translate(self._data.point, +BIG_DISTANCE, 0)
         )
         self["stop_width"] = convex_hull(
             fast_translate(self._data.point, -BIG_DISTANCE, depth),
@@ -74,10 +88,10 @@ class DWWorkingTable:
         del self._data["point"]
         self._update_width_slice()
         self._slice_count = 1
+        timer.stop()
     def __setitem__(self, k, v):
         if hasattr(v, "set_crs"):
             crs = self.source().crs()
-            dprint("CRS:", crs)
             assert crs is not None
             v = v.set_crs(crs=crs)
         self._data[k] = v
@@ -181,7 +195,6 @@ class DWCandidatesTable:
         self._data = clean_dataframe(self._data)
         if points_too: self._frontage_points = clean_dataframe(self._frontage_points)
     def lot_id_mask(self, lot_ids):
-        assert not self._modified
         return mask_for_value_set(self._data, "lot_id", lot_ids, True)
     def is_reusable(self): return self._is_reusable
     def is_single_use(self): return not self._is_reusable
@@ -196,11 +209,20 @@ class DWCandidatesTable:
     def strict_lot(self): return self._data.strict_lot
     def working_lot(self): return self._data.working_lot
     def lot_id(self): return self._data.lot_id
+    def filter_by_area(self, minimum_area):
+        lots = self._data.lot_id[self.working_lot().area < minimum_area]
+        self.discard_lots(lots)
+        return len(lots)
     def discard_lots(self, vals):
+        """
+        Returns the mask used to do the discard from _data.
+        """
         assert not self._is_reusable
-        self._data = discard_matching(self._data, "lot_id", vals)
+        data_mask = mask_for_value_set(self._data, "lot_id", vals, False)
+        self._data = self._data[data_mask]
         self._frontage_points = discard_matching(self._frontage_points, "lot_id", vals)
         self.clean(True)
+        return data_mask
     def rotated_lots(self, rads):
         # TODO: Do the "too narrow" optimization!
         return GeoDataFrame(dict(
@@ -283,8 +305,6 @@ def check_working_table(table):
     * Compute the extrema of these inverse. Infer a minimum width within the slice in order to
       try to immediately declare a winner.
     """
-    
-    log_time("Doing preparatory work")
     slice_goal = table.depth() * 30
     winners_list = []
     while True:
@@ -327,11 +347,12 @@ def dw_winners_array_impl(unrotated_table, depth, width, *, angles=1000):
     if unrotated_table.is_reusable(): unrotated_table = unrotated_table.single_use_copy()
     assert unrotated_table.is_single_use()
     for idx, angle in enumerate(angles):
+        timer = TimerLog("Handled one angle.")
         if unrotated_table.empty(): break
         working_table = DWWorkingTable(unrotated_table, angle * math.tau, depth, width)
         res = check_working_table(working_table)
-        if (res is None) or (0 == len(res)): continue
-        partial_results.append(res)
+        if (res is not None) and len(res): partial_results.append(res)
+        timer.stop()
     if not partial_results:
         return []
     return np.unique(np.concatenate(partial_results))

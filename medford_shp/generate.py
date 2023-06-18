@@ -35,3 +35,4 @@ assert(len(base["ZONE"].unique()) > 1)
 
 if __name__ == "__main__":
     base.to_parquet("./medford.pqt")
+    base.to_file("./medford.shp")

@@ -140,7 +140,10 @@ class TestRectangularNeighborhood(unittest.TestCase):
             geometry_id=np.array(list(range(len(names))), dtype=np.uint64)
         ))
         frontage = basic_rect(1000, 1, (0, -1.5))
-        res = dw_winners_array(df, frontage, geometry_union, 39, 19, angles=4)
+        res = dw_winners_array(df, frontage,
+                               geometry_union,
+                               GDistance(39), GDistance(19),
+                               angles=4)
         res = set(iter(res))
         res = set(names[i] for i in res)
         self.assertEqual(res, set(["GOOD", "GOOD2", "SIDEWAYS"]))
@@ -157,7 +160,8 @@ class TestExact(unittest.TestCase):
     def frontage(self): return basic_rect(1000, 1, (0, -1))
     def test_exact_rectangle(self):
         df = self.df()
-        res = dw_winners_array(df, self.frontage(), df["geometry"].unary_union, 40, 20, angles=100)
+        res = dw_winners_array(df, self.frontage(), df["geometry"].unary_union,
+                               GDistance(40), GDistance(20), angles=100)
         names = self.names()
         res = set(iter(res))
         res = set(names[i] for i in res)
@@ -171,7 +175,8 @@ class TestExact(unittest.TestCase):
         frontage = shapely.affinity.rotate(self.frontage(), ANGLE, origin=(0, 0), use_radians=True)
         print("ROTATED FRONTAGE", frontage)
         print("ROTATED GEOMETRY", df["geometry"])
-        res = dw_winners_array(df, frontage, df["geometry"].unary_union, 40, 20, angles=100)
+        res = dw_winners_array(df, frontage, df["geometry"].unary_union,
+                               GDistance(40), GDistance(20), angles=100)
         names = self.names()
         res = set(iter(res))
         res = set(names[i] for i in res)
@@ -255,4 +260,5 @@ class TestCacheFile(unittest.TestCase):
         c = self.clean_cache()
         entry = DWCacheFile(c, "40_20_no_ft.dwcache")
         self.assertEqual(entry.implies_about_cand(40, 20), dw_cache.IMPLIES_FAILURE)
+
 if __name__ == '__main__': unittest.main()

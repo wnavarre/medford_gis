@@ -56,6 +56,12 @@ medford_border_plots = base[
 
     base.geometry.intersects((geopandas.GeoSeries(np.full(len(base), broadway_corridor), crs=somerville.crs))
 )]
+
+print("Dealing with border plots:")
+for e in medford_border_plots.LOC_ID:
+    print(e)
+print()
+print()
     
 somerville_row = (somerville[somerville.POLY_TYPE == "ROW"].unary_union).intersection(broadway_corridor)
 somerville_plots = somerville[somerville.POLY_TYPE != "ROW"]

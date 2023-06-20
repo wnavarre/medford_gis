@@ -24,6 +24,8 @@ def bool_ticker(features, f, region, *,
     print("width=", width)
     print("height=", height)
     fig, axes_set = plt.subplots(squeeze=True, ncols=count_x, nrows=count_y, figsize=(width, height), dpi=300)
+    if (count_x * count_y) <= 1:
+        axes_set = [[ axes_set ]]
     axes_set = list(chain.from_iterable(axes_set))
     #fig.tight_layout()
     PLACEHOLDER = 1

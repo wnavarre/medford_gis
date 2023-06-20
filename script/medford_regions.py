@@ -15,7 +15,9 @@ class Region:
         height = abs(ymax - ymin)
         width  = abs(xmax - xmin)
         return width / height
-        
+
+class FULL_CITY:
+    FULL       = Region(LineString([(228672, 904939), (235432, 911573)]))
 class GR:
     HILLSIDE   = Region(LineString([(230426, 907575), (231676, 906494)]))
     WEST       = Region(LineString([(229455, 908695), (230575, 907277)]), key_loc="upper left")

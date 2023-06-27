@@ -18,7 +18,7 @@ class DWCacheFile:
             assert filename.endswith(EXTENSION)
             d, w, kind, units = filename[0:-len(EXTENSION)].split("_")
             self._depth = int(d)
-            self._width = int(d)
+            self._width = int(w)
             self._is_yes = (kind == "yes")
             if not self._is_yes: assert kind == "no"
             assert units == "ft"

@@ -11,15 +11,16 @@ from geopandas import GeoSeries, GeoDataFrame
 from frame_set_operations import *
 from basic_frame_operations import *
 from units import *
-import df_parallel
 #import dask_geopandas as gdask
 #import dask
 from infect import infect
 from flexible_key import *
 from fast_rotate import rotate_points_fast, fast_translate
-from performance_logging import log_time
+from performance_logging import log_time, TimerLog
 from enum import Enum
 import copy
+
+def nonone(ls): return [ x for x in ls if (x is not None) ]
 
 gpd = geopandas
 
@@ -32,40 +33,74 @@ GLOBAL_CALLBACK = None
 
 def function_that_does_nothing(*a, **b): pass
 
-dprint = function_that_does_nothing
+dprint = print
 
 class LoggingEvent(Enum):
     CHECK_SLICES = 1
 
-    
+DEBUG_MODE = True
+
+class DistanceBase: pass
+
+class DistanceFeet(DistanceBase):
+    __slots__ = ("_ft", "_m")
+    def __init__(self, ft):
+        self._ft = ft
+        self._m = ft * FEET
+    def gis(self):  return self._m
+    def feet(self): return self._ft
+
+def make_distance(v, default=DistanceFeet):
+    if isinstance(v, DistanceBase): return v
+    return default(v)
+
+def narrow_lot_ids(frame, depth, width):
+    needed = min(depth.gis(), width.gis()) - 0.1 * MILLIMETER
+    bounds = frame.lot.bounds
+    h = bounds.maxx - bounds.minx
+    v = bounds.maxy - bounds.miny
+    too_narrow = (h < needed) | (v < needed)
+    if not too_narrow.any(): return None
+    out = frame.lot_id[too_narrow]
+    print("Identified {} lots that fail based on the width test!".format(len(out)))
+    return out
+
 class DWWorkingTable:
-    def __init__(self, source, rads, depth, width):
-        assert source.is_single_use()
+    def __init__(self, source, rads):
+        timer = TimerLog("Constructed DWWorkingTable")
         source.working_lot() # CHECK...
+        depth = source._depth
+        width = source._width
         self._depth = depth
         self._width = width
         self._slice_count = 0
         self._source = source
-        self._data = source.rotated_lots(rads).merge(
+        rotated_lots = source.rotated_lots(rads)
+        width_test_failures = narrow_lot_ids(rotated_lots, depth, width)
+        if width_test_failures is not None:
+            self.source().discard_lots(width_test_failures)
+        self._data = rotated_lots.merge(
             source.rotated_points(rads),
             how="left",
             on="lot_id"
         )
+        depth = depth.gis()
+        width = width.gis()
         self["depth_line"] = convex_hull(self._data.point,
-                                               fast_translate(self._data.point, 0, depth))
+                                         fast_translate(self._data.point, 0, depth))
         self._data = self._data[self._data.lot.covers(self._data.depth_line)]
         self.clean()
         self["lft_side"] = convex_hull(self._data.point,
-                                             fast_translate(self._data.point, 0, depth),
-                                             fast_translate(self._data.point, -BIG_DISTANCE, depth),
-                                             fast_translate(self._data.point, -BIG_DISTANCE, depth))
+                                       fast_translate(self._data.point, 0, depth),
+                                       fast_translate(self._data.point, -BIG_DISTANCE, depth),
+                                       fast_translate(self._data.point, -BIG_DISTANCE, depth))
         self["rgt_side"] = convex_hull(self._data.point,
-                                             fast_translate(self._data.point, 0, depth),
-                                             fast_translate(self._data.point, +BIG_DISTANCE, depth),
-                                             fast_translate(self._data.point, +BIG_DISTANCE, depth))
+                                       fast_translate(self._data.point, 0, depth),
+                                       fast_translate(self._data.point, +BIG_DISTANCE, depth),
+                                       fast_translate(self._data.point, +BIG_DISTANCE, depth))
         self["start_width"] = convex_hull(
-            fast_translate(self._data.point, -BIG_DISTANCE, 0    ),
-            fast_translate(self._data.point, +BIG_DISTANCE, 0    )
+            fast_translate(self._data.point, -BIG_DISTANCE, 0),
+            fast_translate(self._data.point, +BIG_DISTANCE, 0)
         )
         self["stop_width"] = convex_hull(
             fast_translate(self._data.point, -BIG_DISTANCE, depth),
@@ -74,16 +109,19 @@ class DWWorkingTable:
         del self._data["point"]
         self._update_width_slice()
         self._slice_count = 1
+        timer.stop()
     def __setitem__(self, k, v):
         if hasattr(v, "set_crs"):
             crs = self.source().crs()
-            dprint("CRS:", crs)
             assert crs is not None
             v = v.set_crs(crs=crs)
         self._data[k] = v
     def key_to_id(self): return self.source().key_to_id()
     def empty(self): return not len(self._data)
-    def depth(self): return self._depth
+    def depth_gis(self): return self._depth.gis()
+    def width_gis(self): return self._width.gis()
+    def depth_feet(self): return self._depth.feet()
+    def width_feet(self): return self._width.feet()
     def current_lot_ids(self): return np.unique(self._data.lot_id.to_numpy())
     def slice_count(self): return self._slice_count
     def _update_width_slice(self):
@@ -97,7 +135,7 @@ class DWWorkingTable:
         assert len(self._data) == pre_explosion_count
         self.clean()
     def _prune_losers(self):
-        needed_area = self._depth * self._width / self._slice_count
+        needed_area = (self.depth_gis()) * (self.width_gis()) / self._slice_count
         # Each row corresponds to a slice; each column corresponds to a point.
         # Goal is to reject the whole point if one of its slices lacks the needed area.
         point_slice_success = ((self._data.width_slice.area >= needed_area)
@@ -115,7 +153,7 @@ class DWWorkingTable:
                       .difference(self._data.lot))
         slice_width = rgt_invert.bounds.minx - lft_invert.bounds.maxx
         # Each row corresponds to a slice; each column corresponds to a point.
-        point_success = ((slice_width >= self._width)
+        point_success = ((slice_width >= self.width_gis())
                          .to_numpy()
                          .reshape(self._slice_count, -1)).all(0)
         if not point_success.any(): return None
@@ -138,7 +176,7 @@ class DWWorkingTable:
         del front["stop_width"]
         del back["start_width"]
         self._slice_count *= 2
-        shift_amount = self._depth / self._slice_count
+        shift_amount = self.depth_gis() / self._slice_count
         assert shift_amount >= 0.000001
         shifted_start = front.start_width.translate(0, shift_amount)
         front["stop_width"] = shifted_start
@@ -156,24 +194,77 @@ class DWWorkingTable:
     def source(self): return self._source
 
 class DWCandidatesTable:
-    def __init__(self, data, cache_key=None):
+    def __init__(self, data, depth, width, cache=None):
         assert (data.geometry.crs is not None) or (data.crs is not None)
+        self._depth = depth
+        self._width = width
         self._data = GeoDataFrame(dict(
             strict_lot=data.geometry,
             lot_id=get_matching_key(data, "lot_id", "geometry_id")
         ), geometry="strict_lot", crs=data.geometry.crs)
+        self._lot_id_for_output = self._data.lot_id
         assert self._data.crs is not None
         assert self.lot_id().dtype == np.uint64
         minx, miny, maxx, maxy = self.strict_lot().total_bounds
         self._rotation_point = ((minx + maxx) / 2), ((miny + maxy) / 2)
-        self._is_reusable = True
-        if cache_key is not None:
-            self._cache_key = data[cache_key]
-            self._key_to_id = dict(
+        self._cache = cache
+        if cache is not None:
+            cache_key = cache.cache_key
+            key_to_id = dict(
                 zip(data[cache_key], self._data.lot_id)
             )
-        self._modified = False
-    def empty(self): return not len(self._data)
+            winners_st, losers_st = cache.retrieve_results(depth.feet(), width.feet())
+            cache_winners_array = np.array(nonone(key_to_id.get(w) for w in winners_st), dtype=int)
+            self._cache_winners_mask = self.lot_id_mask(cache_winners_array)
+            cache_win_lose_array = np.concatenate([
+                cache_winners_array,
+                np.array(nonone(key_to_id.get(l) for l in losers_st), dtype=int)
+            ])
+            self.discard_lots(cache_win_lose_array, frontage_points=False)
+            self._info_for_cache_save = self.combine_key_and_id(self._data.lot_id, data, cache_key)
+            self.trim(-1, dry_run=True)
+    @staticmethod
+    def combine_key_and_id(id_series, table, cache_key_nm):
+        left  = pandas.DataFrame(dict(lot_id=id_series))
+        right = pandas.DataFrame(dict(
+            lot_id=get_matching_key(table, "lot_id", "geometry_id"),
+            cache_key=table[cache_key_nm]
+        ))
+        return left.merge(right, on="lot_id", how="inner")
+    def depth_gis(self): return self._depth.gis()
+    def width_gis(self): return self._width.gis()
+    def depth_feet(self): return self._depth.feet()
+    def width_feet(self): return self._width.feet()
+    def trim(self, desired_count, *, dry_run=False):
+        assert self.count() >= desired_count
+        assert len(self._data) == len(self._info_for_cache_save)
+        if DEBUG_MODE:
+            assert (self._data.lot_id == self._info_for_cache_save.lot_id).all()
+        if dry_run: return None
+        trim_mask = np.concatenate([
+            np.ones((desired_count,), dtype=bool),
+            np.zeros((self.count() - desired_count,), dtype=bool)
+        ])
+        new_data = GeoDataFrame({
+            "geometry": self._data.strict_lot[trim_mask],
+            "lot_id"  : self._data.lot_id[trim_mask],
+            self._cache.cache_key : self._info_for_cache_save.cache_key[trim_mask]
+        }, geometry="geometry", crs=self.crs())
+        return DWCandidatesTable(new_data, self._depth, self._width, cache=self._cache)
+    def log_winners_in_cache(self, winning_ids):
+        if self._cache is None: return
+        winning_mask = mask_for_value_set(self._info_for_cache_save,
+                                          "lot_id",
+                                          winning_ids,
+                                          True)
+        losing_mask = np.logical_not(winning_mask)
+        self._cache.store_winners(self.depth_feet(), self.width_feet(),
+                                  self._info_for_cache_save.cache_key[winning_mask])
+        self._cache.store_losers(self.depth_feet(), self.width_feet(),
+                                 self._info_for_cache_save.cache_key[losing_mask])
+    def __len__(self): return self.count()
+    def count(self): return len(self._data)
+    def empty(self): return not self.count()
     def cache_key(self): return self._cache_key
     def key_to_id(self): return self._key_to_id
     def clean(self, points_too=False):
@@ -181,33 +272,47 @@ class DWCandidatesTable:
         self._data = clean_dataframe(self._data)
         if points_too: self._frontage_points = clean_dataframe(self._frontage_points)
     def lot_id_mask(self, lot_ids):
-        assert not self._modified
         return mask_for_value_set(self._data, "lot_id", lot_ids, True)
-    def is_reusable(self): return self._is_reusable
-    def is_single_use(self): return not self._is_reusable
-    def single_use_copy(self):
-        out = copy.copy(self)
-        out._data = self._data.copy(deep=False)
-        out._is_reusable = False
-        return out
     def crs(self):
         assert self._data.crs is not None
         return self._data.crs
     def strict_lot(self): return self._data.strict_lot
     def working_lot(self): return self._data.working_lot
     def lot_id(self): return self._data.lot_id
-    def discard_lots(self, vals):
-        assert not self._is_reusable
-        self._data = discard_matching(self._data, "lot_id", vals)
-        self._frontage_points = discard_matching(self._frontage_points, "lot_id", vals)
-        self.clean(True)
+    def filter_by_area(self):
+        minimum_area = self.depth_gis() * self.width_gis()
+        lots = self._data.lot_id[self.working_lot().area < minimum_area]
+        self.discard_lots(lots)
+        return len(lots)
+    def full_winners_mask(self, winning_ids):
+        if winning_ids is None: return self._cache_winners_mask
+        df = pandas.DataFrame(dict(
+            the=self._lot_id_for_output
+        ))
+        out = mask_for_value_set(df, "the", winning_ids, True)
+        if self._cache is None:
+            return out
+        else:
+            return self._cache_winners_mask | out
+    def discard_lots(self, vals, *, frontage_points=True):
+        """
+        Returns the mask used to do the discard from _data.
+        """
+        data_mask = mask_for_value_set(self._data, "lot_id", vals, False)
+        self._data = self._data[data_mask]
+        if frontage_points:
+            self._frontage_points = discard_matching(self._frontage_points, "lot_id", vals)
+        self.clean(frontage_points)
+        return data_mask
     def rotated_lots(self, rads):
         # TODO: Do the "too narrow" optimization!
+        print("Rotating {} lots.".format(len(self._data)))
         return GeoDataFrame(dict(
             lot=self.working_lot().rotate(rads, self._rotation_point, use_radians=True),
             lot_id=self._data.lot_id
         ), geometry="lot")
     def rotated_points(self, rads):
+        print("Rotating {} points.".format(len(self._frontage_points)))
         return GeoDataFrame(dict(
             lot_id=self._frontage_points.lot_id,
             point=rotate_points_fast(self._frontage_points.geometry,
@@ -234,7 +339,7 @@ class DWCandidatesTable:
             lot_id=self.lot_id()
         ))
         for loop_count in itertools.count():
-            cur_distance = loop_count * 0.3
+            cur_distance = loop_count * 0.45
             ll = ll[ll.geometry.length >= cur_distance]
             if not len(ll): break
             pieces.append(GeoDataFrame(dict(
@@ -246,6 +351,7 @@ class DWCandidatesTable:
         # Assume that frontage is all points on the border that are
         # within 1 meter of the right of way and at least 3 centimeters from
         # any other property.
+        dprint("Inferring frontage for {} geometries".format(len(self._data)))
         shp = len(self._data),
         border_near_row = (GeoSeries(np.full(shp, right_of_way_geo.buffer(1, join_style=MITRE)),
                                      crs=self.crs())
@@ -255,7 +361,9 @@ class DWCandidatesTable:
                                 .intersection(self.strict_lot().
                                               envelope.buffer(2, join_style=MITRE)));
         lines = border_near_row.difference(neighboring_property)
-        return self.infer_frontage_points_from_lines(lines, buffer_lots=buffer_lots)
+        self.infer_frontage_points_from_lines(lines, buffer_lots=buffer_lots)
+        dprint("Infered frontage for {} geometries".format(len(self._data)))
+        return self
 
 def apply_frontage_distance_test(data, depth, width):
     """
@@ -283,9 +391,7 @@ def check_working_table(table):
     * Compute the extrema of these inverse. Infer a minimum width within the slice in order to
       try to immediately declare a winner.
     """
-    
-    log_time("Doing preparatory work")
-    slice_goal = table.depth() * 30
+    slice_goal = table.depth_gis() * 30
     winners_list = []
     while True:
         winners = table.check_sliced()
@@ -316,66 +422,58 @@ def all_angle_ratios(n=1000):
     ratios = [ float(r) for r in ratios]
     return ratios
 
-def dw_winners_array_impl(unrotated_table, depth, width, *, angles=1000):
+def dw_winners_array_impl(cand_table, angles=1000):
     """
     data is a dataframe with columns:
     * geometry (The parcel)
     * geometry_id (uniquely identifies the parcel)
     """
+    print(   "##########################################################")
+    log_time("###################Entering algorithm (depth={}, width={})".format(
+        cand_table.depth_feet(), cand_table.width_feet()
+    ))
+    print(   "##########################################################")
     partial_results = []
     angles = list(all_angle_ratios(angles))
-    if unrotated_table.is_reusable(): unrotated_table = unrotated_table.single_use_copy()
-    assert unrotated_table.is_single_use()
+    
+    print("Eliminated {} lots by area.".format(cand_table.filter_by_area()))
     for idx, angle in enumerate(angles):
-        if unrotated_table.empty(): break
-        working_table = DWWorkingTable(unrotated_table, angle * math.tau, depth, width)
+        timer = TimerLog("Handled one angle.")
+        if cand_table.empty(): break
+        working_table = DWWorkingTable(cand_table, angle * math.tau)
         res = check_working_table(working_table)
-        if (res is None) or (0 == len(res)): continue
-        partial_results.append(res)
+        if (res is not None) and len(res): partial_results.append(res)
+        timer.stop()
     if not partial_results:
         return []
     return np.unique(np.concatenate(partial_results))
 
-def dw_winners_array(df, row, all_property, depth, width, angles=1000):
-    table = DWCandidatesTable(df).infer_frontage_from_geometries(row, all_property).set_single_use()
-    return dw_winners_array_impl(table, depth, width, angles=angles)
+def dw_winners_array(df, row, all_property, depth_in, width_in, angles=1000):
+    depth, width = map(make_distance, (depth_in, width_in))
+    table = DWCandidatesTable(df, depth, width).infer_frontage_from_geometries(row, all_property)
+    return dw_winners_array_impl(table, angles=angles)
 
-def nonone(ls): return [ x for x in ls if (x is not None) ]
-
-def dw_winners_mask_feet_impl(cand_table, depth, width, *, cache=None, **argv):
-    print(   "##########################################################")
-    log_time("###################Entering algorithm (depth={}, width={})".format(depth, width))
-    print(   "##########################################################")
-    original_table, cand_table = cand_table, cand_table.single_use_copy()
-    if cache is not None:
-        # cache_key will generally be the name of a string column
-        # while geometry_id will generally be an arbitrary integer
-        winners_st, losers_st = cache.retrieve_results(depth, width)
-        cache_winners_array = np.array(nonone(key_to_id.get(w) for w in winners_st), dtype=int)
-        cache_win_lose_array = np.concatenate([
-            cache_winners_array,
-            np.array(nonone(cache_key_to_geometry_id.get(l) for l in losers_st), dtype=int)
-        ])
-        cand_table.discard_lots(cache_win_lose_array)
-        mask_c = original_table.lot_id_mask(cache_winners_array)
-        del cache_winners_array
-        del cache_win_lose_array
-    else:
-        print("CACHE IS NONE!")
-    a = dw_winners_array_impl(cand_table, depth * FEET, width * FEET, **argv)
-    mask_a = original_table.lot_id_mask(a)
-    if cache is not None:
-        print("STORING!")
-        cache.store_winners(depth, width, original_table.cache_key()[mask_a])
-        cache.store_losers(depth, width, original_table.cache_key()[np.logical_not(mask_a)])
-        return mask_a | mask_c
-    else:
-        print("CACHE IS NONE!")
-        return mask_a
-
-def dw_winners_mask_feet(data, possible_frontage, definite_non_frontage, depth, width,
+def dw_winners_mask_feet(data, possible_frontage, definite_non_frontage, depth_in, width_in,
                          cache=None, **argv):
-    return dw_winners_mask_feet_impl(
-        DWCandidatesTable(data, cache_key=None if cache is None else cache.cache_key)
-        .infer_frontage_from_geometries(possible_frontage, definite_non_frontage),
-        depth, width, cache=None, **argv)
+    depth, width = map(make_distance, (depth_in, width_in))
+    LIMIT = 800
+    def go(cur_cand_table, *, final=False):
+        cur_cand_table.infer_frontage_from_geometries(possible_frontage, definite_non_frontage)
+        winners_result = dw_winners_array_impl(cur_cand_table, **argv)
+        cur_cand_table.log_winners_in_cache(winners_result)
+        if not final: return None
+        return cur_cand_table.full_winners_mask(winners_result)
+    last_length = None
+    while True:
+        candidate_table = DWCandidatesTable(data, depth, width, cache=cache)
+        if last_length is not None:
+            assert last_length > len(candidate_table)
+            last_length = len(candidate_table)
+        print("{} geometries need work".format(len(candidate_table)))
+        if not len(candidate_table): return candidate_table.full_winners_mask(None)
+        if candidate_table.count() <= LIMIT: return go(candidate_table, final=True)
+        if cache is None:
+            raise ValueError("Cache required for datasets over {} geometries.".format(LIMIT))
+        candidate_table = candidate_table.trim(LIMIT)
+        go(candidate_table)
+        candidate_table = None

@@ -8,3 +8,10 @@ def log_time(msg):
     print(msg, "after", time.perf_counter() - LAST)
     LAST = now
     
+class TimerLog:
+    def __init__(self, msg):
+        self._msg = msg
+        self._start = time.perf_counter()
+    def stop(self):
+        elapsed = time.perf_counter() - self._start
+        print("{}: {}".format(self._msg, elapsed))

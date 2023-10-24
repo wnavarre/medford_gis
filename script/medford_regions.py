@@ -1,8 +1,8 @@
 import geopandas
 from shapely import LineString
 
-INPUT_CRS="26986"
-OUTPUT_CRS=3857
+INPUT_CRS ="26986"
+OUTPUT_CRS="26986"
 
 class Region:
     def __init__(self, line, key_loc="upper left"):

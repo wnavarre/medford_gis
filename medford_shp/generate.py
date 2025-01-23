@@ -45,10 +45,28 @@ other['LOC_ID'] = other.LOC_ID.astype(str)
 other['USE_CODE_3'] = other.USE_CODE.str[0:3]
 other['MIN_COUNT'] = sum([
     (other.USE_CODE_3 == "101"),
+    (other.USE_CODE_3 == "102") * 2, # Pathetic, that just means condo...
     (other.USE_CODE_3 == "104") * 2,
     (other.USE_CODE_3 == "105") * 3,
     (other.USE_CODE_3.str[0:2] == "11") * 8 - (other.USE_CODE_3.str == "111") * 4
 ])
+
+def equals_any(column, values):
+    acc = (column == values[0])
+    for value in values[1:]:
+        acc = acc | (column == value)
+    return acc
+
+other['PUBLIC_USE'] = equals_any(
+    other.USE_CODE_3,
+    ["900", # US GOV
+     "930", # Vacant, local
+     "931", # Improved, local
+     "933", # Vacant Education
+     "934", # Improved Ed
+     "935", # Improved public safety
+     ]
+)
 
 base  =  base.dropna(subset=['LOC_ID'])
 base['LOC_ID'] = base.LOC_ID.astype(str)

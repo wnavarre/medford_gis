@@ -8,8 +8,9 @@ BLUE     = 2
 GREEN    = 3
 PINK     = 4
 NEUTRAL  = 5
-COLOR_MAX   = 5
-COLOR_COUNT = 6
+BLACK    = 6
+COLOR_MAX   = 6
+COLOR_COUNT = 7
 
 BAD_COLOR = RED
 GOOD_COLOR = BLUE
@@ -50,7 +51,8 @@ class ColorSet:
                                  (BLUE   , "#6096BA"),
                                  (GREEN  , "#2F4B26"),
                                  (PINK   , "#E0777D"),
-                                 (NEUTRAL, "#D9CA95")]]
+                                 (NEUTRAL, "#D9CA95"),
+                                 (BLACK,   "#000000")]]
     def __init__(self, colors_used):
         mask = [ False ] * COLOR_COUNT
         for e in colors_used: mask[e] = True

@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 import pylab
 
-parcels = geopandas.read_file("./medford_shp/M176TaxPar_CY21_FY20.shp")
+parcels = geopandas.read_file("./medford_shp/medford.shp")
 parcels = parcels[parcels.ZONE == "GR"]
 parcels = parcels.to_crs(epsg=3857)
 fig, ax = plt.subplots(figsize=(10, 10))

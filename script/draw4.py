@@ -7,9 +7,9 @@ import pylab
 import medford_regions as regions
 from mapping import *
 
-parcels = geopandas.read_file("../medford_shp/M176TaxPar_CY21_FY20.shp")
+parcels = geopandas.read_file("../medford_shp/medford.shp")
 parcels = parcels[parcels.ZONE == "GR"]
-parcels = parcels.to_crs(epsg=3857)
+#parcels = parcels.to_crs(epsg=3857)
 
 
 fig, ax = plt.subplots(figsize=(10, 10), dpi=300)
@@ -35,7 +35,7 @@ gr.plot(ax=forward_legend_func(ax),
         alpha=.5)
 
 plt.axis("off")
-cx.add_basemap(ax)
+#cx.add_basemap(ax)
 
 if __name__ == "__main__":
     fig.savefig('sample.svg', bbox_inches="tight")

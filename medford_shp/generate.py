@@ -19,7 +19,7 @@ def keep(d, to_keep):
     for k in to_keep:
         assert(k in d)
 
-base = geopandas.read_file("../massgis_shp/M176TaxPar_CY21_FY20.shp")
+base = geopandas.read_file("../massgis_shp/M176TaxPar_CY24_FY24.shp")
 
 # Add in the zoning info.
 zoning_table = geopandas.read_file("../medford_zoning/zones.shp")
@@ -33,7 +33,7 @@ base["ZONE"] = best_overlap.find_best_overlaps(base.geometry,
 
 assert(len(base["ZONE"].unique()) > 1)
 
-u_geometry = base.unary_union
+u_geometry = base.union_all()
 u = geopandas.GeoDataFrame(
     geometry=geopandas.GeoSeries([ u_geometry ], crs=base.crs)
 )
@@ -47,7 +47,7 @@ broadway_corridor = (shapely.Point(232914.8, 905164.8)
                      .union(shapely.Point(231973.4, 905583.7))
                      .union(shapely.Point(231955.5, 905548.5))).convex_hull
 broadway_corridor_line = u_geometry.exterior.intersection(broadway_corridor)
-somerville = geopandas.read_file("../somerville_shp/M274TaxPar_CY22_FY23.shp")
+somerville = geopandas.read_file("../somerville_shp/M274TaxPar_CY23_FY24.shp")
 somerville = somerville[somerville.geometry.intersects(
     geopandas.GeoSeries(np.full(len(somerville), broadway_corridor), crs=somerville.crs)
 )]
@@ -63,7 +63,7 @@ for e in medford_border_plots.LOC_ID:
 print()
 print()
     
-somerville_row = (somerville[somerville.POLY_TYPE == "ROW"].unary_union).intersection(broadway_corridor)
+somerville_row = (somerville[somerville.POLY_TYPE == "ROW"].union_all()).intersection(broadway_corridor)
 somerville_plots = somerville[somerville.POLY_TYPE != "ROW"]
 
 somerville_plots = clean_dataframe(somerville_plots)

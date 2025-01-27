@@ -1,5 +1,7 @@
 import geopandas
 from shapely import LineString
+import shapely
+import medford_regions_impl
 
 INPUT_CRS ="26986"
 OUTPUT_CRS="26986"
@@ -18,6 +20,13 @@ class Region:
 
 class FULL_CITY:
     FULL       = Region(LineString([(228672, 904939), (235432, 911573)]))
+
+as_polygon = lambda x: geopandas.GeoSeries([shapely.geometry.Polygon(x)], crs="EPSG:4326").to_crs(crs=OUTPUT_CRS).geometry.iloc[0]
+
+MEDFORD_MAIN_BROADWAY_BOUNDS = as_polygon(medford_regions_impl.broadway_main_medford)
+MISSITUK_DISTRICT = as_polygon(medford_regions_impl.missituk_district_coords)
+BOB = as_polygon(medford_regions_impl.bob_and_all)
+
 class GR:
     HILLSIDE   = Region(LineString([(230426, 907575), (231676, 906494)]))
     WEST       = Region(LineString([(229455, 908695), (230575, 907277)]), key_loc="upper left")

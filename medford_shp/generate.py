@@ -43,13 +43,21 @@ for k in other:
 other = other.dropna(subset=['LOC_ID'])
 other['LOC_ID'] = other.LOC_ID.astype(str)
 other['USE_CODE_3'] = other.USE_CODE.str[0:3]
+
+condos_counts = other[other.USE_CODE_3 == "102"].LOC_ID.value_counts().reset_index()
+condos_counts.columns = ['LOC_ID', 'Condo Unit Count']
+
+other = other.merge(condos_counts, how="left", on="LOC_ID", copy=True)
+
 other['MIN_COUNT'] = sum([
     (other.USE_CODE_3 == "101"),
-    (other.USE_CODE_3 == "102") * 2, # Pathetic, that just means condo...
+    (other.USE_CODE_3 == "102") * 0, # Deal with that later!
     (other.USE_CODE_3 == "104") * 2,
     (other.USE_CODE_3 == "105") * 3,
     (other.USE_CODE_3.str[0:2] == "11") * 8 - (other.USE_CODE_3.str == "111") * 4
 ])
+other['MIN_COUNT'] = np.where(other.USE_CODE_3 == "102", other["Condo Unit Count"], other.MIN_COUNT)
+del other["Condo Unit Count"]
 
 def equals_any(column, values):
     acc = (column == values[0])

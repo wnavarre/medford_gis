@@ -1,3 +1,4 @@
+import shapely
 import contextily as cx
 import geopandas
 import numpy as np
@@ -78,6 +79,11 @@ def make_ax_fixer(xlim, ylim):
 if __name__ == "__main__":
     housing_parcels = parcels[parcels.MIN_COUNT > .9]
     ax_fixer = None
+    south_medford_nr2 = shapely.ops.unary_union([
+        regions.MEDFORD_MAIN_BROADWAY_BOUNDS,
+        regions.MISSITUK_DISTRICT,
+        regions.BOB        
+    ])
     for count in [1, 2, 4, 8]:
         if ax_fixer is None:
             ax = go_geq_units(housing_parcels, count)
@@ -94,3 +100,4 @@ if __name__ == "__main__":
     go(parcels[parcels.intersects(regions.MEDFORD_MAIN_BROADWAY_BOUNDS)], "magoun.png")
     go(parcels[parcels.intersects(regions.MISSITUK_DISTRICT)], "missituk.png")
     go(parcels[parcels.intersects(regions.BOB)], "bob.png")
+    go(parcels[parcels.intersects(south_medford_nr2)], "south_nr2.png")
